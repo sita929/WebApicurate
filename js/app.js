@@ -480,19 +480,60 @@ async function fetchRemoteConnections(user) {
   try {
     const res = await fetch(`${CONNECTIONS_API}?username=${encodeURIComponent(user.username)}`,
       { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      apiFailure = describeApiFailure(res.status);
+      return null;
+    }
+    apiFailure = null;
     const data = await res.json();
-    if (!data.ok || !data.stored) return null;
+    if (!data.ok || !data.stored) {
+      storageReason = data.reason || 'server storage not configured';
+      return null;
+    }
+    storageReason = null;
     return (data.connections || []).map(fromRow);
-  } catch {
+  } catch (err) {
+    apiFailure = `the API could not be reached (${err.message})`;
     return null;
   }
+}
+
+/* Why connections aren't being persisted server-side, when the API is up. */
+let storageReason = null;
+
+/* One line telling the user exactly where their connections live. */
+function renderApiStatus() {
+  const el = document.getElementById('connApiStatus');
+  if (!el) return;
+
+  if (apiFailure) {
+    el.className = 'note note--bad';
+    el.textContent = `Backend unavailable — ${apiFailure}. Connections are verified by key format only and saved in this browser.`;
+  } else if (storageReason) {
+    el.className = 'note note--warn';
+    el.textContent = `API is live and verifying credentials, but not storing them — ${storageReason}. Set KEY_VAULT_URI and SQL_CONNECTION_STRING to persist.`;
+  } else {
+    el.className = 'note note--ok';
+    el.textContent = 'Backend live — credentials are tested against the provider and stored in Key Vault + Azure SQL.';
+  }
+  el.hidden = false;
 }
 
 /* The list to display: server-backed when available, else this browser. */
 async function loadConnections(user) {
   const remote = await fetchRemoteConnections(user);
   return remote !== null ? remote : getConnections(user);
+}
+
+/* Why the backend couldn't be used, for the message shown to the user.
+   Set by the fetch helpers below; null once a call succeeds. */
+let apiFailure = null;
+
+function describeApiFailure(status) {
+  if (status === 404) return 'the /api endpoints are not deployed (set api_location: "api" in the workflow)';
+  if (status === 500) return 'the API returned a server error (check the Function logs)';
+  if (status === 501 || status === 405) return 'this server does not run the API (use: node dev-server.js)';
+  return `the API returned ${status}`;
 }
 
 /* Verify and persist in one call. Falls back to verify-only plus local
@@ -512,6 +553,7 @@ async function submitConnection(user, conn) {
       })
     });
     if (res.ok) {
+      apiFailure = null;
       const data = await res.json();
       if (!data.ok) return { ok: false, message: data.message };
       return {
@@ -522,8 +564,9 @@ async function submitConnection(user, conn) {
         secretName: data.secretName
       };
     }
-  } catch {
-    // fall through to the verify-only path
+    apiFailure = describeApiFailure(res.status);
+  } catch (err) {
+    apiFailure = `the API could not be reached (${err.message})`;
   }
 
   const verdict = await verifyConnection(conn);
@@ -550,6 +593,7 @@ async function renderConnections(user) {
   if (!body) return;
 
   const list = await loadConnections(user);
+  renderApiStatus();
   buildSidebar(user, list);
   if (count) count.textContent = `${list.length} connection${list.length === 1 ? '' : 's'}`;
 
@@ -622,8 +666,9 @@ async function verifyConnection(conn) {
       return { ok: false, message: 'The API rejected these credentials (unauthorized).' };
     }
     // Any other status (typically 404) means the endpoint isn't deployed yet.
-  } catch {
-    // No backend reachable — fall through to the offline check.
+    apiFailure = describeApiFailure(res.status);
+  } catch (err) {
+    apiFailure = `the API could not be reached (${err.message})`;
   }
 
   const meta = PROVIDERS[conn.provider];
@@ -738,7 +783,7 @@ function wireConnections(user) {
       saveConnections(user, list);
       okBox.textContent = result.verified
         ? `Authorization confirmed — saved in this browser only (${result.reason || 'server storage not configured'}).`
-        : 'Added as Unverified: the key format is valid, but live verification needs the backend.';
+        : `Added as Unverified — the key format is valid, but it was not tested: ${apiFailure || 'the backend is unavailable'}.`;
     }
 
     logEvent(user, 'Connection added', `${conn.provider} · ${conn.name}`);

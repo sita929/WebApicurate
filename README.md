@@ -267,6 +267,30 @@ appear → the next scheduled run picks them up. No ADF changes.
 Azure writes a GitHub Actions workflow into the repo and deploys on every push to
 the chosen branch.
 
+### Diagnosing "Added as Unverified"
+
+The Connections page shows a status line saying exactly where connections are
+going:
+
+| Banner | Meaning |
+|---|---|
+| green — *Backend live* | credentials tested against the provider, stored in Key Vault + SQL |
+| amber — *live but not storing* | API works; `KEY_VAULT_URI` / `SQL_CONNECTION_STRING` not set |
+| red — *Backend unavailable* | `/api/*` isn't answering; the reason is named in the banner |
+
+"Added as Unverified" always means the red case: neither `/api/connections`
+nor `/api/verify-connection` responded, so only the key *format* was checked.
+On a deployed site that is almost always `api_location` missing from the
+workflow. Confirm with:
+
+```bash
+curl -i https://<your-site>.azurestaticapps.net/api/verify-connection -X POST   -H "Content-Type: application/json" -d '{"provider":"HubSpot","key":"x"}'
+```
+
+404 → the Functions were never deployed (fix `api_location`).
+Locally, the same symptom means the site is being served by something other
+than `node dev-server.js`.
+
 ### The workflow file
 
 Azure's generated workflow needs `api_location` set, or the Functions never
