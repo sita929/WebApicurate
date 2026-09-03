@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 76 64" role="img" aria-label="APIQurate">
+  <!-- Q ring -->
+  <circle cx="48" cy="30" r="17" fill="none" stroke="#00A5EF" stroke-width="7"/>
+  <!-- magnifier handle / Q tail -->
+  <path d="M52 42 L64 56" fill="none" stroke="#152a5e" stroke-width="8" stroke-linecap="round"/>
+  <!-- A letterform -->
+  <path d="M16 54 L31 10 L46 54" fill="none" stroke="#152a5e" stroke-width="9"
+        stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- node network -->
+  <path d="M11 20 L24 33" fill="none" stroke="#00A5EF" stroke-width="3.5"/>
+  <path d="M7 33 H36" fill="none" stroke="#4CBB2B" stroke-width="3.5"/>
+  <path d="M11 46 H21" fill="none" stroke="#00A5EF" stroke-width="3.5"/>
+  <circle cx="11" cy="20" r="5.5" fill="#00A5EF"/>
+  <circle cx="7"  cy="33" r="5.5" fill="#4CBB2B"/>
+  <circle cx="11" cy="46" r="5.5" fill="#00A5EF"/>
+  <circle cx="36" cy="33" r="5.5" fill="#2CB34A"/>
+  <circle cx="48" cy="30" r="5.5" fill="#8CC63E"/>
+</svg>

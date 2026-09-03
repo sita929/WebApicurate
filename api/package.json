@@ -1,0 +1,13 @@
+{
+  "name": "apiqurate-api",
+  "version": "1.0.0",
+  "description": "APIQurate managed functions for Azure Static Web Apps",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/keyvault-secrets": "^4.9.0",
+    "mssql": "^11.0.1"
+  }
+}

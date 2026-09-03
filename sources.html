@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connections · APIQurate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="img/mark.png" type="image/png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="shell" id="shell">
+
+  <aside class="rail">
+    <div class="rail__head">
+      <a class="mark" href="index.html">
+        <img class="mark__full" src="img/logo.png" alt="APIQurate">
+        <img class="mark__icon" src="img/mark.png" alt="APIQurate">
+      </a>
+      <button class="rail__toggle" id="railToggle" aria-label="Collapse navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 6l-6 6 6 6"/>
+        </svg>
+      </button>
+    </div>
+    <div class="rail__body"><nav id="nav"></nav></div>
+    <div class="rail__foot" id="whoami"></div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="crumbs"><span aria-current="page">Connections</span></div>
+      <div class="topbar__tools">
+        <button class="icon-btn" aria-label="Search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        </button>
+        <button class="icon-btn" aria-label="Notifications">
+          <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 1 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="canvas">
+
+      <div class="pagehead">
+        <div>
+          <h1>Connections</h1>
+          <p>Connect the systems your data should be pulled from. Only you can see your connections.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <div class="card__title">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            Add a connection
+          </div>
+        </div>
+        <div class="card__body">
+          <div class="auth__error" id="connError" role="alert"></div>
+          <div class="note note--ok" id="connOk" hidden></div>
+          <form id="connForm">
+            <div class="filters__body" style="padding:0">
+              <div class="field">
+                <label for="connProvider">Provider</label>
+                <select class="select" id="connProvider"></select>
+              </div>
+              <div class="field" id="connApiField" hidden>
+                <label for="connApi">API</label>
+                <select class="select" id="connApi"></select>
+              </div>
+              <div class="field">
+                <label for="connName">Display name (optional)</label>
+                <input class="input" id="connName" type="text" placeholder="e.g. crm-db">
+              </div>
+              <div class="field" id="connUrlField" hidden>
+                <label for="connUrl">Base URL</label>
+                <input class="input" id="connUrl" type="url" placeholder="https://api.example.com">
+              </div>
+              <div class="field">
+                <label for="connKey" id="connKeyLabel">API key / token</label>
+                <input class="input" id="connKey" type="password" placeholder="Paste your key" required>
+              </div>
+              <button class="btn btn--primary" type="submit" id="connSubmit">
+                <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg> Test &amp; add connection
+              </button>
+            </div>
+            <p class="note" id="connHint"></p>
+          </form>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__head">
+          <div class="card__title">
+            <svg viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>
+            Your connections
+          </div>
+        </div>
+        <div class="card__body card__body--flush">
+          <div class="empty" id="connEmpty">
+            <svg viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>
+            <h3>No connections yet</h3>
+            <p>Add your first API above — HubSpot, Xero, PeopleHR or a custom REST endpoint.</p>
+          </div>
+          <div id="connTable" hidden>
+            <div class="tablewrap">
+              <table class="grid">
+                <thead>
+                  <tr><th>Name</th><th>Provider</th><th>Endpoint</th><th>Key</th><th>Status</th><th>Added</th><th style="width:100px"></th></tr>
+                </thead>
+                <tbody id="connRows"></tbody>
+              </table>
+            </div>
+            <div class="tablefoot">
+              <span id="connCount">0 connections</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>
