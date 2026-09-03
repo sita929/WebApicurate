@@ -579,6 +579,7 @@ async function submitConnection(user, conn) {
         ok: true,
         verified: true,
         stored: !!data.stored,
+        secretStored: !!data.secretStored,
         reason: data.reason,
         secretName: data.secretName
       };
@@ -795,6 +796,16 @@ function wireConnections(user) {
     if (result.stored) {
       // The server owns this record now — nothing sensitive stays in the browser.
       okBox.textContent = `Verified and stored — key saved to Key Vault as "${result.secretName}" and registered for the pipeline.`;
+    } else if (result.secretStored) {
+      /* Key is safe in the vault; the control-table row isn't there yet, so
+         keep a local record — without the key — to list it. */
+      conn.verified = true;
+      conn.secretName = result.secretName;
+      delete conn.key;
+      const list = getConnections(user);
+      list.push(conn);
+      saveConnections(user, list);
+      okBox.textContent = `Verified — key stored in Key Vault as "${result.secretName}". Not yet registered for the pipeline: ${result.reason}.`;
     } else {
       conn.verified = result.verified;
       const list = getConnections(user);

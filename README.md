@@ -203,17 +203,63 @@ degrades honestly rather than pretending it stored something.
 
 ### Configuration
 
+Key Vault and SQL are configured **independently**. Setting only
+`KEY_VAULT_URI` already writes each key to the vault; the SQL control table
+can follow later. The three states:
+
+| Settings present | Behaviour |
+|---|---|
+| neither | verified only, connection kept in the browser |
+| `KEY_VAULT_URI` | key written to the vault; connection listed from the browser |
+| both | key in the vault **and** a row the pipeline reads — fully server-owned |
+
+#### Key Vault access
+
+SWA *managed* functions cannot use a managed identity, so
+`DefaultAzureCredential` needs a service principal supplied as app settings.
+
+```bash
+VAULT_ID=$(az keyvault show --name sumanpockeyvault --query id -o tsv)
+
+# Creates the SP and grants it secret read/write on the vault in one step.
+az ad sp create-for-rbac --name apiqurate-swa   --role "Key Vault Secrets Officer" --scopes "$VAULT_ID"
+```
+
+That prints `appId`, `password` and `tenant` — the three values below. If the
+vault still uses **access policies** rather than RBAC
+(`az keyvault show --name sumanpockeyvault --query properties.enableRbacAuthorization`
+returns `false`), grant access this way instead:
+
+```bash
+az keyvault set-policy --name sumanpockeyvault   --spn <appId> --secret-permissions get set list delete
+```
+
+#### App settings
+
 Static Web App → Configuration → Application settings:
 
 | Setting | Value |
 |---|---|
-| `KEY_VAULT_URI` | `https://<your-vault>.vault.azure.net` |
-| `SQL_CONNECTION_STRING` | `Server=tcp:<srv>.database.windows.net,1433;Database=<db>;User Id=...;Password=...;Encrypt=true` |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | Service principal with **Key Vault Secrets Officer** on the vault |
+| `KEY_VAULT_URI` | `https://sumanpockeyvault.vault.azure.net/` |
+| `AZURE_TENANT_ID` | `tenant` from the command above |
+| `AZURE_CLIENT_ID` | `appId` |
+| `AZURE_CLIENT_SECRET` | `password` |
+| `SQL_CONNECTION_STRING` | *(optional at this stage)* `Server=tcp:<srv>.database.windows.net,1433;Database=<db>;User Id=...;Password=...;Encrypt=true` |
 
-Managed *functions* can't use a managed identity, hence the service principal.
-If you switch to a linked Function App, drop those three and assign it a
-managed identity instead — `DefaultAzureCredential` picks up either.
+Or in one command:
+
+```bash
+az staticwebapp appsettings set --name <your-swa-name> --setting-names   KEY_VAULT_URI="https://sumanpockeyvault.vault.azure.net/"   AZURE_TENANT_ID="<tenant>" AZURE_CLIENT_ID="<appId>" AZURE_CLIENT_SECRET="<password>"
+```
+
+Confirm with `/api/ping` — it reports `keyVaultConfigured` and `sqlConfigured`.
+Secrets appear in the vault as `hubspot--<username>`, `xero--<username>`, and so on.
+
+If you later switch to a linked Function App instead of managed functions,
+drop the three `AZURE_*` settings and assign it a managed identity —
+`DefaultAzureCredential` picks up either.
+
+#### SQL control table
 
 Create the table once:
 

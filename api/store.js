@@ -32,26 +32,35 @@ function secretNameFor(provider, username) {
 
 /* ---------- Availability ---------- */
 
-function missingConfig() {
-  const missing = [];
-  if (!KEY_VAULT_URI) missing.push('KEY_VAULT_URI');
-  if (!SQL_CONNECTION_STRING) missing.push('SQL_CONNECTION_STRING');
-  return missing;
-}
-
 function tryRequire(name) {
   try { return require(name); } catch { return null; }
 }
 
-/* Returns null when ready, or a human-readable reason it isn't. */
-function storageUnavailable() {
-  const missing = missingConfig();
-  if (missing.length) return `not configured (${missing.join(', ')})`;
-
-  for (const mod of ['@azure/identity', '@azure/keyvault-secrets', 'mssql']) {
+function missingModule(names) {
+  for (const mod of names) {
     if (!tryRequire(mod)) return `dependency "${mod}" is not installed (run npm install in api/)`;
   }
   return null;
+}
+
+/* Key Vault and SQL are checked independently: storing the key in the vault
+   is useful on its own, before the control table exists. Each returns null
+   when ready, or a human-readable reason it isn't. */
+
+function vaultUnavailable() {
+  if (!KEY_VAULT_URI) return 'KEY_VAULT_URI is not set';
+  return missingModule(['@azure/identity', '@azure/keyvault-secrets']);
+}
+
+function sqlUnavailable() {
+  if (!SQL_CONNECTION_STRING) return 'SQL_CONNECTION_STRING is not set';
+  return missingModule(['mssql']);
+}
+
+/* Ready only when both halves work — used for the "fully stored" state. */
+function storageUnavailable() {
+  const reasons = [vaultUnavailable(), sqlUnavailable()].filter(Boolean);
+  return reasons.length ? reasons.join('; ') : null;
 }
 
 /* ---------- Key Vault ---------- */
@@ -83,52 +92,75 @@ function sqlPool() {
 /* ---------- Operations ---------- */
 
 /* Store the key in Key Vault, then upsert the control-table row.
-   Key Vault first: a stranded secret is harmless, a SQL row pointing
-   at a secret that doesn't exist would break the pipeline. */
+
+   The two halves are independent: with only the vault configured the secret
+   is still written (and the caller keeps the record client-side), so the
+   vault can be set up before the SQL control table exists. Key Vault goes
+   first — a stranded secret is harmless, a SQL row pointing at a secret that
+   doesn't exist would break the pipeline. */
 async function saveConnection({ username, provider, api, name, baseUrl, key }) {
-  const reason = storageUnavailable();
-  if (reason) return { stored: false, reason };
-
-  const sql = require('mssql');
   const secretName = secretNameFor(provider, username);
+  const result = {
+    secret: { stored: false, name: secretName, reason: vaultUnavailable() },
+    row: { stored: false, id: null, reason: sqlUnavailable() }
+  };
 
-  await vault().setSecret(secretName, key, {
-    tags: { provider, username, app: 'apiqurate' }
-  });
+  if (!result.secret.reason) {
+    await vault().setSecret(secretName, key, {
+      tags: { provider, username, app: 'apiqurate' }
+    });
+    result.secret.stored = true;
+  }
 
-  const pool = await sqlPool();
-  const result = await pool.request()
-    .input('Username', sql.NVarChar(100), username)
-    .input('Provider', sql.NVarChar(50), provider)
-    .input('ApiName', sql.NVarChar(100), api || '')
-    .input('DisplayName', sql.NVarChar(100), name)
-    .input('SecretName', sql.NVarChar(200), secretName)
-    .input('BaseUrl', sql.NVarChar(400), baseUrl)
-    .query(`
-      MERGE app.ApiConnections AS target
-      USING (SELECT @Username AS Username, @Provider AS Provider, @ApiName AS ApiName) AS src
-        ON  target.Username = src.Username
-        AND target.Provider = src.Provider
-        AND target.ApiName  = src.ApiName
-      WHEN MATCHED THEN UPDATE SET
-        DisplayName = @DisplayName, SecretName = @SecretName,
-        BaseUrl = @BaseUrl, Enabled = 1, VerifiedAt = SYSUTCDATETIME()
-      WHEN NOT MATCHED THEN INSERT
-        (Username, Provider, ApiName, DisplayName, SecretName, BaseUrl, Enabled, VerifiedAt)
-        VALUES (@Username, @Provider, @ApiName, @DisplayName, @SecretName, @BaseUrl, 1, SYSUTCDATETIME())
-      OUTPUT inserted.Id;
-    `);
+  if (!result.row.reason) {
+    /* Without the secret in the vault the pipeline has nothing to resolve,
+       so don't advertise a connection it can't actually run. */
+    if (!result.secret.stored) {
+      result.row.reason = 'skipped — the key was not stored in Key Vault';
+    } else {
+      const sql = require('mssql');
+      const pool = await sqlPool();
+      const inserted = await pool.request()
+        .input('Username', sql.NVarChar(100), username)
+        .input('Provider', sql.NVarChar(50), provider)
+        .input('ApiName', sql.NVarChar(100), api || '')
+        .input('DisplayName', sql.NVarChar(100), name)
+        .input('SecretName', sql.NVarChar(200), secretName)
+        .input('BaseUrl', sql.NVarChar(400), baseUrl)
+        .query(`
+          MERGE app.ApiConnections AS target
+          USING (SELECT @Username AS Username, @Provider AS Provider, @ApiName AS ApiName) AS src
+            ON  target.Username = src.Username
+            AND target.Provider = src.Provider
+            AND target.ApiName  = src.ApiName
+          WHEN MATCHED THEN UPDATE SET
+            DisplayName = @DisplayName, SecretName = @SecretName,
+            BaseUrl = @BaseUrl, Enabled = 1, VerifiedAt = SYSUTCDATETIME()
+          WHEN NOT MATCHED THEN INSERT
+            (Username, Provider, ApiName, DisplayName, SecretName, BaseUrl, Enabled, VerifiedAt)
+            VALUES (@Username, @Provider, @ApiName, @DisplayName, @SecretName, @BaseUrl, 1, SYSUTCDATETIME())
+          OUTPUT inserted.Id;
+        `);
+      result.row.stored = true;
+      result.row.id = inserted.recordset && inserted.recordset[0] ? inserted.recordset[0].Id : null;
+    }
+  }
 
+  /* `stored` means fully server-owned: secret in the vault AND a row the
+     pipeline will pick up. Anything less and the caller keeps its own copy. */
   return {
-    stored: true,
-    secretName,
-    id: result.recordset && result.recordset[0] ? result.recordset[0].Id : null
+    stored: result.secret.stored && result.row.stored,
+    secretStored: result.secret.stored,
+    secretName: result.secret.stored ? secretName : null,
+    rowStored: result.row.stored,
+    id: result.row.id,
+    reason: [result.secret.reason, result.row.reason].filter(Boolean).join('; ') || undefined
   };
 }
 
 /* List one user's connections. Never returns keys — only secret names. */
 async function listConnections(username) {
-  const reason = storageUnavailable();
+  const reason = sqlUnavailable();
   if (reason) return { stored: false, reason, connections: [] };
 
   const sql = require('mssql');
@@ -148,7 +180,7 @@ async function listConnections(username) {
 /* Remove the row, then the secret. Row first so the pipeline stops
    using it immediately even if the vault delete fails. */
 async function deleteConnection(username, id) {
-  const reason = storageUnavailable();
+  const reason = sqlUnavailable();
   if (reason) return { stored: false, reason };
 
   const sql = require('mssql');
@@ -176,6 +208,8 @@ async function deleteConnection(username, id) {
 module.exports = {
   secretNameFor,
   storageUnavailable,
+  vaultUnavailable,
+  sqlUnavailable,
   saveConnection,
   listConnections,
   deleteConnection

@@ -56,12 +56,14 @@ module.exports = async function (context, req) {
       if (!verdict.ok) return json(200, { ok: false, verified: false, message: verdict.message });
 
       const stored = await saveConnection({ username, provider, api, name, baseUrl, key });
-      context.log(`connections: store ${provider} for ${username} -> ${stored.stored ? stored.secretName : stored.reason}`);
+      context.log(`connections: store ${provider} for ${username} -> secret=${stored.secretStored} row=${stored.rowStored}${stored.reason ? ' (' + stored.reason + ')' : ''}`);
 
       return json(200, {
         ok: true,
         verified: true,
         stored: stored.stored,
+        secretStored: stored.secretStored,
+        rowStored: stored.rowStored,
         reason: stored.reason,
         secretName: stored.secretName,
         id: stored.id
