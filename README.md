@@ -204,8 +204,19 @@ On success the request continues into storage — see the next section.
 
 The key exists in the Function for the probe and the vault write, then is
 discarded: it is never written to SQL, never logged, and never returned to the
-browser. `GET /api/connections` lists a user's rows (secret names only) and
-`DELETE /api/connections?id=` removes the row first, then the secret.
+browser. `GET /api/connections` lists a user's rows (secret names only).
+
+**Removing a connection deletes its Key Vault secret.** `DELETE
+/api/connections` takes either `id` (drops the SQL row, then the secret) or
+`provider` (vault-only mode, where the browser owns the list). The secret is
+kept when something else still needs it: Xero's several APIs share one token,
+so it goes only when the last connection using it does — the server checks the
+control table, or the browser passes `secretInUse`.
+
+Key Vault soft-deletes, so a removed secret is recoverable rather than gone.
+That also means re-adding the same connection would hit a name conflict, so
+`saveConnection` recovers the soft-deleted secret and rewrites it. To purge
+permanently, use `az keyvault secret purge` (needs the purge permission).
 
 Identity comes from the Static Web Apps `x-ms-client-principal` header when
 auth is configured, which **overrides** any username in the request — so one

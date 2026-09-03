@@ -605,16 +605,40 @@ async function submitConnection(user, conn) {
   return { ok: verdict.ok, message: verdict.message, verified: verdict.verified, stored: false };
 }
 
+/* Remove the connection and its Key Vault secret.
+
+   With SQL the server owns the list, so it decides whether the secret is
+   still needed. Without it we own the list, so we tell the server whether
+   another of our connections still uses the same secret — providers like
+   Xero share one token across several APIs. */
 async function removeConnection(user, conn) {
+  const params = new URLSearchParams({ username: user.username });
+
   if (conn.remote) {
-    const url = `${CONNECTIONS_API}?username=${encodeURIComponent(user.username)}&id=${encodeURIComponent(conn.id)}`;
-    try {
-      await fetch(url, { method: 'DELETE' });
-    } catch { /* the list refresh below will show the truth */ }
+    params.set('id', conn.id);
   } else {
+    const others = getConnections(user)
+      .filter(c => c.id !== conn.id && c.provider === conn.provider);
+    params.set('provider', conn.provider);
+    params.set('secretInUse', String(others.length > 0));
+  }
+
+  let removed = null;
+  if (conn.remote || conn.secretName) {
+    try {
+      const res = await fetch(`${CONNECTIONS_API}?${params}`, { method: 'DELETE' });
+      if (res.ok) removed = await res.json().catch(() => null);
+    } catch { /* the list refresh below will show the truth */ }
+  }
+
+  if (!conn.remote) {
     saveConnections(user, getConnections(user).filter(c => c.id !== conn.id));
   }
-  logEvent(user, 'Connection removed', `${conn.provider} · ${conn.name}`);
+
+  const secretNote = removed && removed.secretDeleted
+    ? ` (secret ${removed.secretName} deleted)`
+    : removed && removed.secretReason ? ` (secret ${removed.secretReason})` : '';
+  logEvent(user, 'Connection removed', `${conn.provider} · ${conn.name}${secretNote}`);
 }
 
 async function renderConnections(user) {

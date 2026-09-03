@@ -41,10 +41,21 @@ module.exports = async function (context, req) {
     }
 
     if (req.method === 'DELETE') {
-      const id = (req.query && req.query.id) || (req.body && req.body.id);
-      if (!id) return json(400, { ok: false, message: 'id is required.' });
-      const result = await deleteConnection(username, id);
-      context.log(`connections: delete ${username}/${id} -> ${result.stored ? 'ok' : result.reason}`);
+      const q = req.query || {};
+      const b = req.body || {};
+      /* `id` removes a SQL row; `provider` covers vault-only mode, where the
+         caller owns the list and tells us if the secret is still needed. */
+      const opts = {
+        id: q.id || b.id,
+        provider: q.provider || b.provider,
+        secretInUse: String(q.secretInUse ?? b.secretInUse ?? '') === 'true'
+      };
+      if (!opts.id && !opts.provider) {
+        return json(400, { ok: false, message: 'id or provider is required.' });
+      }
+
+      const result = await deleteConnection(username, opts);
+      context.log(`connections: delete ${username} ${opts.id || opts.provider} -> row=${result.rowDeleted} secret=${result.secretDeleted}${result.secretReason ? ' (' + result.secretReason + ')' : ''}`);
       return json(200, { ok: true, ...result });
     }
 

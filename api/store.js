@@ -123,15 +123,29 @@ async function saveConnection({ username, provider, api, name, baseUrl, key }) {
   };
 
   if (!result.secret.reason) {
+    /* Stored with the auth scheme included, because Data Factory sends the
+       secret value straight into the Authorization header. */
+    const value = secretValueFor(provider, key);
+    const tags = { provider, username, app: 'apiqurate' };
+
     try {
-      /* Stored with the auth scheme included, because Data Factory sends the
-         secret value straight into the Authorization header. */
-      await vault().setSecret(secretName, secretValueFor(provider, key), {
-        tags: { provider, username, app: 'apiqurate' }
-      });
+      await vault().setSecret(secretName, value, { tags });
       result.secret.stored = true;
     } catch (err) {
-      result.secret.reason = `Key Vault write failed: ${describeAzureError(err)}`;
+      /* A previously removed connection leaves the secret soft-deleted, and
+         Key Vault refuses to reuse the name until it is recovered. */
+      if (/deleted but recoverable|ObjectIsDeletedButRecoverable|Conflict/i.test(String(err && err.message))) {
+        try {
+          const poller = await vault().beginRecoverDeletedSecret(secretName);
+          await poller.pollUntilDone();
+          await vault().setSecret(secretName, value, { tags });
+          result.secret.stored = true;
+        } catch (recoverErr) {
+          result.secret.reason = `Key Vault write failed after recovery attempt: ${describeAzureError(recoverErr)}`;
+        }
+      } else {
+        result.secret.reason = `Key Vault write failed: ${describeAzureError(err)}`;
+      }
     }
   }
 
@@ -204,32 +218,84 @@ async function listConnections(username) {
   return { stored: true, connections: result.recordset };
 }
 
-/* Remove the row, then the secret. Row first so the pipeline stops
-   using it immediately even if the vault delete fails. */
-async function deleteConnection(username, id) {
-  const reason = sqlUnavailable();
-  if (reason) return { stored: false, reason };
+/* Soft-delete the secret. Key Vault keeps it recoverable, which is why
+   saveConnection knows how to recover one when a connection is re-added. */
+async function removeSecret(secretName) {
+  const reason = vaultUnavailable();
+  if (reason) return { deleted: false, reason };
 
-  const sql = require('mssql');
-  const pool = await sqlPool();
-  const found = await pool.request()
-    .input('Username', sql.NVarChar(100), username)
-    .input('Id', sql.Int, Number(id))
-    .query(`
-      DELETE FROM app.ApiConnections
-      OUTPUT deleted.SecretName
-      WHERE Username = @Username AND Id = @Id;
-    `);
-
-  if (!found.recordset.length) return { stored: true, deleted: false };
-
-  const { SecretName } = found.recordset[0];
   try {
-    await vault().beginDeleteSecret(SecretName);
-  } catch {
-    // Row is gone, so the pipeline can't use it; the secret can be purged later.
+    await vault().beginDeleteSecret(secretName);
+    return { deleted: true };
+  } catch (err) {
+    if (/SecretNotFound|not found|404/i.test(String(err && err.message))) {
+      return { deleted: false, reason: 'the secret was already gone' };
+    }
+    return { deleted: false, reason: describeAzureError(err) };
   }
-  return { stored: true, deleted: true, secretName: SecretName };
+}
+
+/* Remove a connection and, when nothing else needs it, its Key Vault secret.
+
+   Two modes:
+   - `id`       the SQL row to drop (the secret follows if unused elsewhere)
+   - `provider` vault-only mode, where the caller keeps the list; it passes
+                `secretInUse` to say whether another of its connections
+                still relies on the same secret.
+
+   Xero's several APIs share one token — and therefore one secret — so the
+   secret is only removed when the last connection using it goes. */
+async function deleteConnection(username, { id, provider, secretInUse } = {}) {
+  const sqlReason = sqlUnavailable();
+  const result = { rowDeleted: false, secretDeleted: false, secretName: null };
+  let stillUsed = Boolean(secretInUse);
+
+  if (!sqlReason && id) {
+    const sql = require('mssql');
+    const pool = await sqlPool();
+
+    const dropped = await pool.request()
+      .input('Username', sql.NVarChar(100), username)
+      .input('Id', sql.Int, Number(id))
+      .query(`
+        DELETE FROM app.ApiConnections
+        OUTPUT deleted.SecretName
+        WHERE Username = @Username AND Id = @Id;
+      `);
+
+    if (!dropped.recordset.length) {
+      return { ...result, notFound: true };
+    }
+
+    result.rowDeleted = true;
+    result.secretName = dropped.recordset[0].SecretName;
+
+    /* Another API for the same provider may still point at this secret. */
+    const remaining = await pool.request()
+      .input('Username', sql.NVarChar(100), username)
+      .input('SecretName', sql.NVarChar(200), result.secretName)
+      .query(`
+        SELECT COUNT(*) AS InUse FROM app.ApiConnections
+        WHERE Username = @Username AND SecretName = @SecretName;
+      `);
+    stillUsed = remaining.recordset[0].InUse > 0;
+
+  } else if (provider) {
+    /* No row to drop in this mode — the caller keeps the list. */
+    result.secretName = secretNameFor(provider, username);
+  } else {
+    return { ...result, reason: sqlReason || 'id or provider is required' };
+  }
+
+  if (stillUsed) {
+    result.secretReason = 'kept — another connection still uses this secret';
+    return result;
+  }
+
+  const removed = await removeSecret(result.secretName);
+  result.secretDeleted = removed.deleted;
+  if (removed.reason) result.secretReason = removed.reason;
+  return result;
 }
 
 module.exports = {
