@@ -267,6 +267,25 @@ appear → the next scheduled run picks them up. No ADF changes.
 Azure writes a GitHub Actions workflow into the repo and deploys on every push to
 the chosen branch.
 
+### The workflow file
+
+Azure's generated workflow needs `api_location` set, or the Functions never
+deploy and every connection falls back to *browser only*:
+
+```yaml
+          app_location: "/"
+          api_location: "api"      # <- must not be empty
+          output_location: "."
+```
+
+The root `package.json` exists only to satisfy Oryx: `dev-server.js` at the
+repo root makes it detect a Node app, and it then fails the build looking for a
+`build` script. The script is a deliberate no-op — there is nothing to bundle.
+(Setting `skip_app_build: true` in the workflow is an equivalent fix.)
+
+The `Unexpected input(s) 'github_id_token'` warning is harmless — a newer
+workflow template against an older action version.
+
 ### If the Static Web App already exists
 
 The workflow was generated with whatever Api location was set at creation. If it

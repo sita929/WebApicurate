@@ -1,0 +1,13 @@
+{
+  "name": "apiqurate",
+  "version": "1.0.0",
+  "private": true,
+  "description": "APIQurate console — static front end, no bundler",
+  "scripts": {
+    "start": "node dev-server.js",
+    "build": "echo \"Static site — nothing to build.\""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
