@@ -173,7 +173,23 @@ The probe per provider:
 | Custom REST | `GET <base URL>` with `Bearer` | any 2xx |
 
 The key is used for the probe only — never logged, echoed back, or stored by
-the Function. Calls time out after 10 seconds.
+the Function. Calls time out after 10 seconds. If a user pastes `Bearer <token>`
+the scheme is stripped before probing, so it verifies either way.
+
+#### What gets stored in Key Vault
+
+Data Factory's REST linked service sends the secret value **verbatim** as the
+`Authorization` header, so the secret must carry the scheme:
+
+| Provider | Secret value |
+|---|---|
+| HubSpot | `Bearer pat-na2-…` |
+| Xero | `Bearer <access token>` |
+| Custom REST | `Bearer <token>` |
+| PeopleHR | the raw key — it authenticates with `APIKey` in the body, not a header |
+
+So the ADF linked service needs no `@concat('Bearer ', ...)`; it references the
+secret directly (see the pipeline section below).
 
 On success the request continues into storage — see the next section.
 
@@ -218,21 +234,49 @@ can follow later. The three states:
 SWA *managed* functions cannot use a managed identity, so
 `DefaultAzureCredential` needs a service principal supplied as app settings.
 
+Azure Cloud Shell defaults to **PowerShell**, where `VAR=$(...)` is not valid —
+use `$VAR = ...`. PowerShell:
+
+```powershell
+$vaultId = az keyvault show --name sumanpockeyvault --query id -o tsv
+
+# 1. Create the service principal (prints appId / password / tenant)
+az ad sp create-for-rbac --name apiqurate-swa
+
+# 2. Grant it secret read/write on the vault only
+az role assignment create --assignee <appId> `
+  --role "Key Vault Secrets Officer" --scope $vaultId
+```
+
+Bash equivalent:
+
 ```bash
 VAULT_ID=$(az keyvault show --name sumanpockeyvault --query id -o tsv)
-
-# Creates the SP and grants it secret read/write on the vault in one step.
-az ad sp create-for-rbac --name apiqurate-swa   --role "Key Vault Secrets Officer" --scopes "$VAULT_ID"
+az ad sp create-for-rbac --name apiqurate-swa
+az role assignment create --assignee <appId>   --role "Key Vault Secrets Officer" --scope "$VAULT_ID"
 ```
 
-That prints `appId`, `password` and `tenant` — the three values below. If the
-vault still uses **access policies** rather than RBAC
-(`az keyvault show --name sumanpockeyvault --query properties.enableRbacAuthorization`
-returns `false`), grant access this way instead:
+Always pass an explicit `--scope`. If it is empty the assignment is attempted
+at scope `''`, which either fails or lands far wider than intended — check what
+actually exists with:
 
-```bash
-az keyvault set-policy --name sumanpockeyvault   --spn <appId> --secret-permissions get set list delete
+```powershell
+az role assignment list --assignee <appId> --all -o table
 ```
+
+If the vault uses **access policies** rather than RBAC — check with
+`az keyvault show --name sumanpockeyvault --query properties.enableRbacAuthorization` —
+grant access this way instead (note: no angle brackets, PowerShell treats `<`
+as an operator):
+
+```powershell
+az keyvault set-policy --name sumanpockeyvault --spn <appId> `
+  --secret-permissions get set list delete
+```
+
+Treat the printed `password` as a live credential: never paste it into chat,
+source control, or a ticket. If one leaks, rotate it with
+`az ad app credential reset --id <appId>`.
 
 #### App settings
 
@@ -246,11 +290,20 @@ Static Web App → Configuration → Application settings:
 | `AZURE_CLIENT_SECRET` | `password` |
 | `SQL_CONNECTION_STRING` | *(optional at this stage)* `Server=tcp:<srv>.database.windows.net,1433;Database=<db>;User Id=...;Password=...;Encrypt=true` |
 
-Or in one command:
+Or from the CLI. The `--name` is the **resource name**, not the hostname
+prefix (`proud-meadow-05a99be0f` is a hostname; the resource is usually named
+after the repo) — look it up first:
 
-```bash
-az staticwebapp appsettings set --name <your-swa-name> --setting-names   KEY_VAULT_URI="https://sumanpockeyvault.vault.azure.net/"   AZURE_TENANT_ID="<tenant>" AZURE_CLIENT_ID="<appId>" AZURE_CLIENT_SECRET="<password>"
+```powershell
+az staticwebapp list --query "[].{name:name, rg:resourceGroup, host:defaultHostname}" -o table
+
+az staticwebapp appsettings set --name <resource-name> --setting-names `
+  KEY_VAULT_URI="https://sumanpockeyvault.vault.azure.net/" `
+  AZURE_TENANT_ID="<tenant>" AZURE_CLIENT_ID="<appId>" AZURE_CLIENT_SECRET="<password>"
 ```
+
+Substitute real values — a quoted `"<password>"` is stored literally and shows
+up later as a confusing 401 from Key Vault.
 
 Confirm with `/api/ping` — it reports `keyVaultConfigured` and `sqlConfigured`.
 Secrets appear in the vault as `hubspot--<username>`, `xero--<username>`, and so on.
@@ -261,11 +314,25 @@ drop the three `AZURE_*` settings and assign it a managed identity —
 
 #### SQL control table
 
-Create the table once:
+Until this is done, keys are stored in Key Vault but the pipeline has no rows
+to read. Create the table once — Cloud Shell already has `sqlcmd`, and `-G`
+uses your Azure AD login:
 
 ```bash
 sqlcmd -S <server>.database.windows.net -d <db> -G -i sql/schema.sql
 ```
+
+Then add the connection string as an app setting. SQL authentication (a
+contained user with `db_datareader`/`db_datawriter`) keeps the Functions
+independent of your personal login:
+
+```powershell
+az staticwebapp appsettings set --name APIQurateTest --resource-group Suman `
+  --setting-names SQL_CONNECTION_STRING="Server=tcp:<srv>.database.windows.net,1433;Database=<db>;User Id=<user>;Password=<pw>;Encrypt=true;TrustServerCertificate=false"
+```
+
+Make sure the SQL server firewall has **Allow Azure services** enabled, or the
+Functions can't reach it.
 
 ## Per-user pipeline design (HubSpot via ADF)
 

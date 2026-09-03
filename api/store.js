@@ -18,6 +18,8 @@
    no persistence) on a machine where the Azure SDKs aren't installed.
    ============================================================ */
 
+const { secretValueFor } = require('./verify');
+
 const KEY_VAULT_URI = process.env.KEY_VAULT_URI || '';
 const SQL_CONNECTION_STRING = process.env.SQL_CONNECTION_STRING || '';
 
@@ -91,6 +93,21 @@ function sqlPool() {
 
 /* ---------- Operations ---------- */
 
+/* Azure SDK errors are verbose; pull out the part that says what to fix. */
+function describeAzureError(err) {
+  const msg = String(err && err.message || err);
+  if (/Forbidden|403/.test(msg)) {
+    return 'access denied (403) — the service principal lacks Key Vault Secrets Officer, or the vault uses access policies';
+  }
+  if (/401|invalid_client|AADSTS/.test(msg)) {
+    return 'authentication failed — check AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID';
+  }
+  if (/ENOTFOUND|getaddrinfo|ETIMEDOUT/.test(msg)) {
+    return 'could not reach the resource — check the URI / connection string';
+  }
+  return msg.slice(0, 200);
+}
+
 /* Store the key in Key Vault, then upsert the control-table row.
 
    The two halves are independent: with only the vault configured the secret
@@ -106,10 +123,16 @@ async function saveConnection({ username, provider, api, name, baseUrl, key }) {
   };
 
   if (!result.secret.reason) {
-    await vault().setSecret(secretName, key, {
-      tags: { provider, username, app: 'apiqurate' }
-    });
-    result.secret.stored = true;
+    try {
+      /* Stored with the auth scheme included, because Data Factory sends the
+         secret value straight into the Authorization header. */
+      await vault().setSecret(secretName, secretValueFor(provider, key), {
+        tags: { provider, username, app: 'apiqurate' }
+      });
+      result.secret.stored = true;
+    } catch (err) {
+      result.secret.reason = `Key Vault write failed: ${describeAzureError(err)}`;
+    }
   }
 
   if (!result.row.reason) {
@@ -118,6 +141,7 @@ async function saveConnection({ username, provider, api, name, baseUrl, key }) {
     if (!result.secret.stored) {
       result.row.reason = 'skipped — the key was not stored in Key Vault';
     } else {
+      try {
       const sql = require('mssql');
       const pool = await sqlPool();
       const inserted = await pool.request()
@@ -143,6 +167,9 @@ async function saveConnection({ username, provider, api, name, baseUrl, key }) {
         `);
       result.row.stored = true;
       result.row.id = inserted.recordset && inserted.recordset[0] ? inserted.recordset[0].Id : null;
+      } catch (err) {
+        result.row.reason = `SQL write failed: ${describeAzureError(err)}`;
+      }
     }
   }
 

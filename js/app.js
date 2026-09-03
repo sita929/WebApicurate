@@ -529,8 +529,15 @@ async function renderApiStatus() {
   }
 
   if (storageReason) {
+    /* The list endpoint only reports SQL; ask the probe what the vault is
+       doing so the banner doesn't claim a working setting is missing. */
+    const probe = await probeApi();
+    const vaultReady = probe.deployed && probe.info && probe.info.vaultReady === 'ready';
+
     el.className = 'note note--warn';
-    el.textContent = `API is live and verifying credentials, but not storing them — ${storageReason}. Set KEY_VAULT_URI and SQL_CONNECTION_STRING to persist.`;
+    el.textContent = vaultReady
+      ? `Keys are stored in Key Vault. Connections aren't registered for the pipeline yet — ${storageReason}. Run sql/schema.sql and set SQL_CONNECTION_STRING.`
+      : `API is live and verifying credentials, but not storing them — ${storageReason}. Set KEY_VAULT_URI and SQL_CONNECTION_STRING to persist.`;
   } else {
     el.className = 'note note--ok';
     el.textContent = 'Backend live — credentials are tested against the provider and stored in Key Vault + Azure SQL.';
@@ -584,7 +591,12 @@ async function submitConnection(user, conn) {
         secretName: data.secretName
       };
     }
-    apiFailure = describeApiFailure(res.status);
+    /* Keep the server's own explanation — it is far more useful than a
+       generic "not configured" fallback. */
+    const detail = await res.json().catch(() => null);
+    apiFailure = detail && detail.message
+      ? `${describeApiFailure(res.status)} — ${detail.message}`
+      : describeApiFailure(res.status);
   } catch (err) {
     apiFailure = `the API could not be reached (${err.message})`;
   }
@@ -795,7 +807,7 @@ function wireConnections(user) {
 
     if (result.stored) {
       // The server owns this record now — nothing sensitive stays in the browser.
-      okBox.textContent = `Verified and stored — key saved to Key Vault as "${result.secretName}" and registered for the pipeline.`;
+      okBox.textContent = `Verified and stored — key saved to Key Vault as "${result.secretName}" (with the Bearer prefix) and registered for the pipeline.`;
     } else if (result.secretStored) {
       /* Key is safe in the vault; the control-table row isn't there yet, so
          keep a local record — without the key — to list it. */
@@ -805,14 +817,14 @@ function wireConnections(user) {
       const list = getConnections(user);
       list.push(conn);
       saveConnections(user, list);
-      okBox.textContent = `Verified — key stored in Key Vault as "${result.secretName}". Not yet registered for the pipeline: ${result.reason}.`;
+      okBox.textContent = `Verified — key stored in Key Vault as "${result.secretName}" (with the Bearer prefix, ready for Data Factory). Not yet registered for the pipeline: ${result.reason}.`;
     } else {
       conn.verified = result.verified;
       const list = getConnections(user);
       list.push(conn);
       saveConnections(user, list);
       okBox.textContent = result.verified
-        ? `Authorization confirmed — saved in this browser only (${result.reason || 'server storage not configured'}).`
+        ? `Authorization confirmed — saved in this browser only (${result.reason || apiFailure || 'server storage not configured'}).`
         : `Added as Unverified — the key format is valid, but it was not tested: ${apiFailure || 'the backend is unavailable'}.`;
     }
 

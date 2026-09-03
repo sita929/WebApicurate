@@ -26,6 +26,34 @@ function join(baseUrl, path) {
   return baseUrl.replace(/\/+$/, '') + '/' + path.replace(/^\/+/, '');
 }
 
+/* ---------- Secret shape ----------
+
+   Data Factory's REST linked service sends the Key Vault secret value
+   verbatim as the Authorization header, so the stored secret must include
+   the scheme: "Bearer pat-na2-...", not the bare token.
+
+   PeopleHR is the exception — it authenticates with APIKey in the request
+   body, so its secret stays raw. */
+
+const AUTH_SCHEME = {
+  'HubSpot': 'Bearer',
+  'Xero': 'Bearer',
+  'Custom REST': 'Bearer',
+  'PeopleHR': null
+};
+
+/* Users often paste "Bearer xyz" — probe with the bare token either way. */
+function stripScheme(key) {
+  return String(key || '').trim().replace(/^Bearer\s+/i, '');
+}
+
+/* What gets written to Key Vault. */
+function secretValueFor(provider, key) {
+  const token = stripScheme(key);
+  const scheme = AUTH_SCHEME[provider];
+  return scheme ? `${scheme} ${token}` : token;
+}
+
 const PROBES = {
   async HubSpot(baseUrl, key) {
     const res = await request(join(baseUrl, 'crm/v3/objects/contacts?limit=1'), {
@@ -83,6 +111,8 @@ const PROBES = {
 async function verifyCredentials({ provider, baseUrl, key }) {
   if (!provider || !key) return fail('Provider and key are required.');
 
+  key = stripScheme(key);
+
   const probe = PROBES[provider];
   if (!probe) return fail(`Unknown provider "${provider}".`);
 
@@ -100,4 +130,4 @@ async function verifyCredentials({ provider, baseUrl, key }) {
   }
 }
 
-module.exports = { verifyCredentials };
+module.exports = { verifyCredentials, secretValueFor, stripScheme };
