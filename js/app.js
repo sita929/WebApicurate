@@ -501,15 +501,34 @@ async function fetchRemoteConnections(user) {
 /* Why connections aren't being persisted server-side, when the API is up. */
 let storageReason = null;
 
+/* Distinguish "no API at all" from "API up, this function failed" by
+   hitting the dependency-free probe. */
+async function probeApi() {
+  try {
+    const res = await fetch('/api/ping', { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { deployed: false, status: res.status };
+    return { deployed: true, info: await res.json() };
+  } catch {
+    return { deployed: false };
+  }
+}
+
 /* One line telling the user exactly where their connections live. */
-function renderApiStatus() {
+async function renderApiStatus() {
   const el = document.getElementById('connApiStatus');
   if (!el) return;
 
   if (apiFailure) {
+    const probe = await probeApi();
     el.className = 'note note--bad';
-    el.textContent = `Backend unavailable — ${apiFailure}. Connections are verified by key format only and saved in this browser.`;
-  } else if (storageReason) {
+    el.textContent = probe.deployed
+      ? `Backend reachable but /api/connections failed — ${apiFailure}. Check the Function logs in the Azure portal.`
+      : `Backend unavailable — ${apiFailure}. Connections are verified by key format only and saved in this browser.`;
+    el.hidden = false;
+    return;
+  }
+
+  if (storageReason) {
     el.className = 'note note--warn';
     el.textContent = `API is live and verifying credentials, but not storing them — ${storageReason}. Set KEY_VAULT_URI and SQL_CONNECTION_STRING to persist.`;
   } else {
@@ -593,7 +612,7 @@ async function renderConnections(user) {
   if (!body) return;
 
   const list = await loadConnections(user);
-  renderApiStatus();
+  await renderApiStatus();
   buildSidebar(user, list);
   if (count) count.textContent = `${list.length} connection${list.length === 1 ? '' : 's'}`;
 

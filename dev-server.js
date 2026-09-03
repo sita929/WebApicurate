@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const verifyConnection = require('./api/verify-connection');
 const connections = require('./api/connections');
+const ping = require('./api/ping');
 
 const PORT = process.env.PORT || 8123;
 const ROOT = __dirname;
@@ -54,7 +55,8 @@ function readBody(req) {
    with a minimal stand-in for the Functions `context` object. */
 const ROUTES = {
   'verify-connection': verifyConnection,
-  'connections': connections
+  'connections': connections,
+  'ping': ping
 };
 
 async function handleApi(req, res, route) {

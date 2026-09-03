@@ -70,6 +70,7 @@ img/                     logo assets
 *.html                   one file per page
 api/verify.js            per-provider credential probes
 api/store.js             Key Vault + Azure SQL persistence
+api/ping/                Function: deployment probe (no deps)
 api/verify-connection/   Function: test credentials only
 api/connections/         Function: verify, then store; list; delete
 sql/schema.sql           app.ApiConnections control table
@@ -159,6 +160,7 @@ server-side and answers `{ ok: true }` or `{ ok: false, message }`.
 |---|---|
 | `api/verify.js` | The probes — one read-only call per provider |
 | `api/verify-connection/` | Azure Function wrapper (SWA managed function) |
+| `api/ping/` | Dependency-free deployment probe |
 | `dev-server.js` | Local server: static files + the same `/api` handler |
 
 The probe per provider:
@@ -280,16 +282,23 @@ going:
 
 "Added as Unverified" always means the red case: neither `/api/connections`
 nor `/api/verify-connection` responded, so only the key *format* was checked.
-On a deployed site that is almost always `api_location` missing from the
-workflow. Confirm with:
+
+**`GET /api/ping` is the deployment probe.** It has no dependencies and reads
+no config, so it answers even when Key Vault, SQL or `npm install` are broken:
 
 ```bash
-curl -i https://<your-site>.azurestaticapps.net/api/verify-connection -X POST   -H "Content-Type: application/json" -d '{"provider":"HubSpot","key":"x"}'
+curl -i https://<your-site>.azurestaticapps.net/api/ping
 ```
 
-404 → the Functions were never deployed (fix `api_location`).
-Locally, the same symptom means the site is being served by something other
-than `node dev-server.js`.
+| Result | Meaning | Fix |
+|---|---|---|
+| `404` | the Functions were never deployed | set `api_location: "api"` in the workflow |
+| `{"ok":true,...}` | API is live | read `keyVaultConfigured` / `sqlConfigured` in the response |
+| `500` | deployed but crashing | check Function logs in the portal |
+
+Open it in a browser too — it is a plain GET. Locally the same 404/501 symptom
+means the site is being served by something other than `node dev-server.js`
+(Python's `http.server` answers POST with `501`).
 
 ### The workflow file
 
